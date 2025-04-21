@@ -1,6 +1,8 @@
 from engine.utils import *
 
 from engine.boids import Boid
+from engine.performance import Performance
+
 
 
 class Engine:
@@ -15,6 +17,7 @@ class Engine:
         self.visual_range = 40
         self.protected_range = 8
 
+        self.performance = Performance()
 
     def process(self):
         for boid in self.boids:
@@ -43,6 +46,7 @@ class Engine:
 
     def run(self):
         while True:
+            self.performance.start()
             for ev in pg.event.get():
                 if ev.type == QUIT or (ev.type == KEYDOWN and ev.key == K_ESCAPE):
                     pg.quit()
@@ -52,6 +56,9 @@ class Engine:
 
             self.process()
             self.render()
+
+            self.performance.end()
+            pg.display.set_caption(f"{TITLE} - FPS: {self.clock.get_fps():.2f} - AVG TIME: {self.performance.average_time() * 1000:.2f} ms - BOIDS: {len(self.boids)}")
 
             pg.display.update()
             self.clock.tick(FPS)
