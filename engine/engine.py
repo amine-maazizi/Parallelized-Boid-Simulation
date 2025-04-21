@@ -3,17 +3,73 @@ from engine.utils import *
 from engine.boids import Boid
 from engine.performance import Performance
 
+from mpi4py import MPI
+import numpy as np
 
 
 class Engine:
 
     def __init__(self, n=500):
-        pg.init()
-        self.display = pg.display.set_mode(DIM)
-        pg.display.set_caption(TITLE)
-        self.clock = pg.time.Clock()
+        # MPI initialization
+        self.comm = MPI.COMM_WORLD
+        self.rank = self.comm.Get_rank()
+        self.size = self.comm.Get_size()
+        self.grid_size = int(np.sqrt(self.size))
+        assert self.grid_size * self.grid_size == self.size, "ERROR:Number of processes must be a perfect square."
+
+        self.cart_comm = self.comm.Create_cart((self.grid_size, self.grid_size), periods=(True, True), reorder=True) # 2D cartesian topology
+        self.coords = self.cart_comm.Get_coords(self.rank) # Get the coordinates of the current process in the grid
+
+        if self.rank == 0:
+            print(f"""
+            MPI initialized with {self.size} processes in a {self.grid_size}x{self.grid_size} grid.
+            Each process will handle a {DIM.x // self.grid_size}x{DIM.y // self.grid_size} subgrid.
+            Each process will handle {n // self.size} boids.
+            Iniializing the engine with {n} boids...
+                  """)
+            pg.init()
+            self.display = pg.display.set_mode(DIM)
+            pg.display.set_caption(TITLE)
+            self.clock = pg.time.Clock()
+        else:
+            self.display = None
+            self.clock = None
+
+        # Local subdomain dimensions
+        self.local_width = DIM.x // self.grid_size
+        self.local_height = DIM.y // self.grid_size
+        self.local_x = self.coords[0] * self.local_width
+        self.local_y = self.coords[1] * self.local_height
         
-        self.boids = [Boid(Engine.random_vector(), Engine.random_vector(), group=1 if random() % 2 else 2) for _ in range(n)]
+        # Initialize boids
+        if self.rank == 0:
+            self.boids = [Boid(Engine.random_vector(), Engine.random_vector(), 
+                              group=1 if random() % 2 else 2) for _ in range(n)]
+        else:
+            self.boids = []  
+
+
+        # Prepare boids for each process
+        if self.rank == 0:
+            boids_per_rank = [[] for _ in range(self.size)]
+            for boid in self.boids:
+                # Finding the subdomain for each boid
+                x_subdomain = int(boid.pos.x // self.local_width)
+                y_subdomain = int(boid.pos.y // self.local_height)
+                x_subdomain = min(x_subdomain, self.grid_size - 1) # Clamp to avoid index out of range
+                y_subdomain = min(y_subdomain, self.grid_size - 1) # Clamp to avoid index out of range
+
+                rank_dest = self.cart_comm.Get_cart_rank((x_subdomain, y_subdomain)) # Get the rank of the process responsible for the subdomain
+                boids_per_rank[rank_dest].append(boid)
+        else:
+            boids_per_rank = None
+        
+        # Scatter the boids to each process
+        self.local_boids = self.comm.scatter(boids_per_rank, root=0)
+
+        # Initialize ghost boids
+        self.ghost_boids = []
+        
         self.visual_range = 40
         self.protected_range = 8
 
